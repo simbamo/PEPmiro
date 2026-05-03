@@ -94,6 +94,7 @@ def extract_for_lesson(
         {"role": "user", "content": user_msg},
     ]
 
+    raw = None
     try:
         raw = call_text(messages)
         # Try to extract JSON array from response
@@ -106,7 +107,7 @@ def extract_for_lesson(
                 c["lesson_idx"] = lesson_idx
             return chars
     except Exception as exc:
-        print(f"[step4]   {vol_id}/{lesson_idx}: parse error {exc}, raw: {raw[:200]}")
+        print(f"[step4]   {vol_id}/{lesson_idx}: error {exc}, raw: {(raw or '')[:200]}")
 
     return []
 
