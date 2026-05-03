@@ -18,7 +18,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from pipeline import config
 
-MINIMAX_BASE = "https://api.minimax.chat/v1"
+MINIMAX_BASE = "https://api.minimaxi.com/v1"
 
 
 SYSTEM_PROMPT = """You are a helpful assistant that extracts character personas from English textbook content.
@@ -46,7 +46,7 @@ def build_text_payload(messages: list[dict]) -> dict:
 
 @retry(wait=wait_exponential(min=2, max=10), stop=stop_after_attempt(3))
 def call_text(messages: list[dict]) -> str:
-    url = f"{MINIMAX_BASE}/text/chatcompletion_v2"
+    url = f"{MINIMAX_BASE}/chat/completions"
     headers = {
         "Authorization": f"Bearer {config.MINIMAX_API_KEY}",
         "Content-Type": "application/json",

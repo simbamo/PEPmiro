@@ -17,7 +17,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from pipeline import config
 
-MINIMAX_BASE = "https://api.minimax.chat/v1"
+MINIMAX_BASE = "https://api.minimaxi.com/v1"
 
 
 def image_to_base64(path: Path) -> str:
@@ -61,7 +61,7 @@ USER_PROMPT = (
 
 @retry(wait=wait_exponential(min=2, max=10), stop=stop_after_attempt(3))
 def call_vl(image_path: Path) -> dict:
-    url = f"{MINIMAX_BASE}/vision/chat"
+    url = f"{MINIMAX_BASE}/chat/completions"
     headers = {
         "Authorization": f"Bearer {config.MINIMAX_API_KEY}",
         "Content-Type": "application/json",
@@ -69,6 +69,7 @@ def call_vl(image_path: Path) -> dict:
     payload = build_vl_payload(image_path, USER_PROMPT)
 
     resp = requests.post(url, headers=headers, json=payload, timeout=60)
+    print(f"[step3]   HTTP {resp.status_code}: {resp.text[:300]}")
     resp.raise_for_status()
     data = resp.json()
 
