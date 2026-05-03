@@ -21,37 +21,17 @@ from pipeline import config
 MINIMAX_BASE = "https://api.minimaxi.com/v1"
 
 
-SYSTEM_PROMPT = """You are a helpful assistant that extracts character personas from English textbook content.
-Your task is to identify named characters, people, or animals that appear in the text or images,
-and for each character extract:
-- name (or description if unnamed)
-- personality traits (brief, 2-4 adjectives)
-- interests / hobbies
-- relationships (family, friends, classmates)
-- 2-3 example dialogues or catchphrases from the text
-
-Return a JSON array of character objects with these fields.
-If multiple characters share the same name across lessons, merge their info.
-Only include characters that have a named identity (e.g., "Amy", "Bob the cat"), not generic "children" or "students".
-"""
-
-
-def build_text_payload(messages: list[dict]) -> dict:
-    return {
-        "model": config.MINIMAX_TEXT_MODEL,
-        "messages": messages,
-        "temperature": 0.3,
-    }
-
-
-@retry(wait=wait_exponential(min=2, max=10), stop=stop_after_attempt(3))
 def call_text(messages: list[dict]) -> str:
     url = f"{MINIMAX_BASE}/chat/completions"
     headers = {
         "Authorization": f"Bearer {config.MINIMAX_API_KEY}",
         "Content-Type": "application/json",
     }
-    payload = build_text_payload(messages)
+    payload = {
+        "model": config.MINIMAX_TEXT_MODEL,
+        "messages": messages,
+        "temperature": 0.3,
+    }
 
     resp = requests.post(url, headers=headers, json=payload, timeout=60)
     resp.raise_for_status()
@@ -65,6 +45,21 @@ def call_text(messages: list[dict]) -> str:
         raise RuntimeError(f"No choices in response: {data}")
 
     return choices[0]["message"]["content"]
+
+
+SYSTEM_PROMPT = """You are a helpful assistant that extracts character personas from English textbook content.
+Your task is to identify named characters, people, or animals that appear in the text or images,
+and for each character extract:
+- name (or description if unnamed)
+- personality traits (brief, 2-4 adjectives)
+- interests / hobbies
+- relationships (family, friends, classmates)
+- 2-3 example dialogues or catchphrases from the text
+
+Return a JSON array of character objects with these fields.
+If multiple characters share the same name across lessons, merge their info.
+Only include characters that have a named identity (e.g., "Amy", "Bob the cat"), not generic "children" or "students".
+"""
 
 
 def load_vision_results() -> dict[tuple[str, str], str]:

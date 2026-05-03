@@ -11,13 +11,12 @@ import json
 import time
 from pathlib import Path
 
-import anthropic
+import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from pipeline import config
 
-# MiniMax supports Anthropic-compatible API at this base URL
-MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
+MINIMAX_BASE = "https://api.minimaxi.com/v1"
 
 SYSTEM_PROMPT = (
     "You are an image understanding assistant for an English textbook. "
@@ -34,48 +33,51 @@ USER_PROMPT = (
 )
 
 
-def make_client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(
-        api_key=config.MINIMAX_API_KEY,
-        base_url=MINIMAX_BASE_URL,
-    )
+def image_to_base64(path: Path) -> str:
+    return base64.b64encode(path.read_bytes()).decode("utf-8")
 
 
 @retry(wait=wait_exponential(min=2, max=10), stop=stop_after_attempt(3))
-def call_vl(client: anthropic.Anthropic, image_path: Path) -> str:
-    img_b64 = base64.b64encode(image_path.read_bytes()).decode("utf-8")
-
-    response = client.messages.create(
-        model=config.MINIMAX_VL_MODEL,
-        max_tokens=512,
-        system=SYSTEM_PROMPT,
-        messages=[
+def call_vl(image_path: Path) -> str:
+    img_b64 = image_to_base64(image_path)
+    url = f"{MINIMAX_BASE}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {config.MINIMAX_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": config.MINIMAX_VL_MODEL,
+        "messages": [
             {
                 "role": "user",
                 "content": [
                     {"type": "text", "text": USER_PROMPT},
                     {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/png",
-                            "data": img_b64,
-                        },
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{img_b64}"},
                     },
                 ],
             }
         ],
-    )
+        "max_tokens": 512,
+        "temperature": 0.1,
+    }
 
-    return response.content[0].text
+    resp = requests.post(url, headers=headers, json=payload, timeout=60)
+    resp.raise_for_status()
+    data = resp.json()
+
+    if "error" in data:
+        raise RuntimeError(f"MiniMax API error: {data['error']}")
+
+    choices = data.get("choices") or []
+    if not choices:
+        raise RuntimeError(f"No choices in response: {data}")
+
+    return choices[0]["message"]["content"]
 
 
-def process_lesson(
-    client: anthropic.Anthropic,
-    vol_id: str,
-    lesson_idx: str,
-    images_dir: Path,
-) -> list[dict]:
+def process_lesson(vol_id: str, lesson_idx: str, images_dir: Path) -> list[dict]:
     results: list[dict] = []
     image_files = sorted(images_dir.glob("*.png"))
     if not image_files:
@@ -84,7 +86,7 @@ def process_lesson(
     print(f"[step3]   {vol_id}/{lesson_idx}: {len(image_files)} images")
     for img_path in image_files:
         try:
-            text = call_vl(client, img_path)
+            text = call_vl(img_path)
             results.append(
                 {
                     "vol_id": vol_id,
@@ -110,7 +112,6 @@ def process_lesson(
 
 
 def main() -> None:
-    client = make_client()
     out_path = config.ARTIFACTS / "vision_results.jsonl"
     all_results: list[dict] = []
 
@@ -120,7 +121,7 @@ def main() -> None:
             if not lesson_dir.is_dir():
                 continue
             lesson_idx = lesson_dir.name
-            results = process_lesson(client, vol_id, lesson_idx, lesson_dir)
+            results = process_lesson(vol_id, lesson_idx, lesson_dir)
             all_results.extend(results)
 
     with out_path.open("w", encoding="utf-8") as f:
