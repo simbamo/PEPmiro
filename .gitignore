@@ -1,0 +1,10 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+artifacts/pages/
+artifacts/images/
+artifacts/*.json
+artifacts/*.md
+pdfs/*.pdf
+.DS_Store
