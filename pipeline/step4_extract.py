@@ -33,7 +33,7 @@ def call_text(messages: list[dict]) -> str:
         "temperature": 0.3,
     }
 
-    resp = requests.post(url, headers=headers, json=payload, timeout=60)
+    resp = requests.post(url, headers=headers, json=payload, timeout=120)
     resp.raise_for_status()
     data = resp.json()
 
@@ -104,8 +104,11 @@ def extract_for_lesson(
     raw = None
     try:
         raw = call_text(messages)
-        # Strip thinking tags that some models wrap responses in
-        raw = re.sub(r"^<think>.*?</think>\s*", "", raw, flags=re.DOTALL).strip()
+        # Strip all <think>...</think> thinking blocks (iteratively, in case of nesting)
+        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+        raw = raw.strip()
+        print(f"[step4] DEBUG raw[:300]: {raw[:300]}")
         # Try to extract JSON array from response
         raw = re.sub(r"^```json\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw)
