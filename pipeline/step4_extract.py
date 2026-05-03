@@ -104,8 +104,10 @@ def extract_for_lesson(
     raw = None
     try:
         raw = call_text(messages)
+        # Strip thinking tags that some models wrap responses in
+        raw = re.sub(r"^<think>.*?</think>\s*", "", raw, flags=re.DOTALL).strip()
         # Try to extract JSON array from response
-        raw = re.sub(r"^```json\s*", "", raw.strip())
+        raw = re.sub(r"^```json\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw)
         chars = json.loads(raw)
         if isinstance(chars, list):
