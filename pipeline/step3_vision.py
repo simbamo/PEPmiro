@@ -1,31 +1,20 @@
 """
-Step 3: 视觉角色检测 — MiniMax M2.7 识别课本插图中的角色。
+Step 3: 视觉角色检测 — mmx vision describe 识别课本插图中的角色。
 
 输入: artifacts/images/<vol_id>/<lesson_idx>/*.png
 输出: artifacts/vision_results.jsonl  (每行一个 image → 识别结果)
 """
 from __future__ import annotations
 
-import base64
 import json
+import os
+import subprocess
 import time
 from pathlib import Path
 
-import requests
-from tenacity import retry, stop_after_attempt, wait_exponential
-
 from pipeline import config
 
-MINIMAX_BASE = "https://api.minimaxi.com/v1"
-
-SYSTEM_PROMPT = (
-    "You are an image understanding assistant for an English textbook. "
-    "Look at the image carefully and identify all named characters, people, "
-    "or animals that appear. For each one, return: name/description, and "
-    "briefly what they are doing. Be specific about names if text is visible."
-)
-
-USER_PROMPT = (
+PROMPT = (
     "Identify all characters, people, or animals in this textbook image. "
     "For each, give: (1) name/description, (2) one-line action/context. "
     "If no characters are identifiable, say 'No identifiable characters'. "
@@ -33,48 +22,22 @@ USER_PROMPT = (
 )
 
 
-def image_to_base64(path: Path) -> str:
-    return base64.b64encode(path.read_bytes()).decode("utf-8")
-
-
-@retry(wait=wait_exponential(min=2, max=10), stop=stop_after_attempt(3))
 def call_vl(image_path: Path) -> str:
-    img_b64 = image_to_base64(image_path)
-    url = f"{MINIMAX_BASE}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {config.MINIMAX_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": config.MINIMAX_VL_MODEL,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": USER_PROMPT},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{img_b64}"},
-                    },
-                ],
-            }
+    env = {**os.environ, "NO_PROXY": "*"}
+    result = subprocess.run(
+        [
+            "mmx", "vision", "describe",
+            "--image", str(image_path),
+            "--prompt", PROMPT,
         ],
-        "max_tokens": 512,
-        "temperature": 0.1,
-    }
-
-    resp = requests.post(url, headers=headers, json=payload, timeout=60)
-    resp.raise_for_status()
-    data = resp.json()
-
-    if "error" in data:
-        raise RuntimeError(f"MiniMax API error: {data['error']}")
-
-    choices = data.get("choices") or []
-    if not choices:
-        raise RuntimeError(f"No choices in response: {data}")
-
-    return choices[0]["message"]["content"]
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"mmx failed: {result.stderr.strip()}")
+    return result.stdout.strip()
 
 
 def process_lesson(vol_id: str, lesson_idx: str, images_dir: Path) -> list[dict]:
