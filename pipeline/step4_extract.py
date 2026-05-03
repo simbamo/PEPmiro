@@ -71,7 +71,14 @@ def load_vision_results() -> dict[tuple[str, str], str]:
         for line in f:
             obj = json.loads(line)
             key = (obj["vol_id"], obj["lesson_idx"])
-            results[key] = results.get(key, "") + "\n" + obj.get("vision_result", "")
+            raw = obj.get("vision_result", "")
+            # mmx returns JSON with {"content": "...", "base_resp": {...}}
+            try:
+                parsed = json.loads(raw)
+                text = parsed.get("content", raw)
+            except Exception:
+                text = raw
+            results[key] = results.get(key, "") + "\n" + text
     return results
 
 
