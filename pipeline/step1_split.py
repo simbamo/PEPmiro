@@ -6,14 +6,12 @@ Step 1: 把 4 册 PDF 拆成「按课文」的文本 + 插图。
     artifacts/pages/<vol_id>/<lesson_idx>_<title>.md
     artifacts/images/<vol_id>/<lesson_idx>/<image_id>.png
 
-切分策略 (启发式):
-  1) 扫一遍每页文本，找形如「\\d+ 标题」「第 \\d+ 课 标题」「目录中列出的标题」的行做边界
-  2) 每条边界 → 一篇课文，从该页起到下一边界前一页为止
-  3) 课文文本由 page.get_text("text") 拼接，去空白行
-  4) 插图 = page.get_images() 嵌入图 + 整页渲染图都导出，过滤掉太小的装饰图
-
-切分一定会有错（人教版排版每年微调）。脚本会同时输出 manifest.json 列出所有切边界，
-跑完后人工浏览 artifacts/pages/<vol_id>/ 一眼能看出对不对，错了改 manifest 再 --redo 重出。
+英文 PEP 课本切分策略:
+  1) 扫每页文本，找 "Unit N" 做课文边界
+  2) 标题从 "Unit N" 前的非数字行取
+  3) 每条边界 → 一篇课文，从该页起到下一边界前一页为止
+  4) 课文文本由 page.get_text("text") 拼接，去空白行
+  5) 插图 = page.get_images() + 整页渲染图都导出
 """
 from __future__ import annotations
 
@@ -28,11 +26,13 @@ import fitz
 from pipeline import config
 
 
-LESSON_HEADER_PATTERNS = [
-    re.compile(r"^\s*第\s*([一二三四五六七八九十百千\d]+)\s*课\s+(.+)$"),
-    re.compile(r"^\s*(\d{1,2})\s+([一-鿿《].+)$"),
-    re.compile(r"^\s*(\d{1,2})\.\s+(.+)$"),
-]
+# Patterns for English PEP textbook
+# "Unit 1 Making friends" — number + title on same line
+UNIT_FULL_PAT = re.compile(r"^\s*Unit\s+(\d+)\s+(.+)\s*$", re.IGNORECASE)
+# "Unit 1" alone — look backward for title
+UNIT_SINGLE_PAT = re.compile(r"^\s*Unit\s+(\d+)\s*$", re.IGNORECASE)
+# Pure number line — skip when searching backward for title
+UNIT_NUM_LINE = re.compile(r"^\s*\d+\s*$")
 
 
 @dataclass
@@ -44,63 +44,92 @@ class LessonBoundary:
     end_page: int
 
 
-def detect_boundaries(doc: fitz.Document, vol_id: str) -> list[LessonBoundary]:
-    raw: list[tuple[int, int, str]] = []
-    for page_no in range(len(doc)):
-        text = doc[page_no].get_text("text")
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or len(line) > 40:
+def find_unit_boundaries(doc: fitz.Document, vol_id: str) -> list[LessonBoundary]:
+    # Parse TOC pages (first 8 pages) to get unit number -> TOC page ref
+    PAGE_NUM_PAT = re.compile(r"p\.\s*(\d+)", re.IGNORECASE)
+    # Match "N  Title" unit entry in TOC
+    UNIT_ENTRY_PAT = re.compile(r"(\d+)\s+([A-Za-z][^\n]{0,40})")
+
+    unit_toc_pages: dict[int, int] = {}  # unit number -> TOC page number
+    for pg in range(min(8, len(doc))):
+        text = doc[pg].get_text("text")
+        # Find unit entries and their following p. ref
+        for m in UNIT_ENTRY_PAT.finditer(text):
+            num = int(m.group(1))
+            if not (1 <= num <= 20):
                 continue
-            for pat in LESSON_HEADER_PATTERNS:
-                m = pat.match(line)
-                if not m:
-                    continue
-                idx_token, title = m.group(1), m.group(2).strip()
-                idx = _parse_idx(idx_token)
-                if idx is None or not title:
-                    continue
-                raw.append((page_no, idx, title))
-                break
+            # Look for p. ref after this match (within 200 chars)
+            search_region = text[m.end() : m.end() + 200]
+            page_m = PAGE_NUM_PAT.search(search_region)
+            if page_m:
+                toc_page = int(page_m.group(1))
+                if num not in unit_toc_pages:
+                    unit_toc_pages[num] = toc_page
 
-    by_idx: dict[int, tuple[int, int, str]] = {}
-    for page_no, idx, title in raw:
-        prev = by_idx.get(idx)
-        if prev is None or page_no > prev[0]:
-            by_idx[idx] = (page_no, idx, title)
-    cleaned = sorted(by_idx.values(), key=lambda x: x[1])
-
+    # Build unit starts using TOC page numbers
+    # Known offset: PDF page = TOC page + 6 (verified from PDF structure)
+    OFFSET = 6
     boundaries: list[LessonBoundary] = []
-    for i, (page_no, idx, title) in enumerate(cleaned):
-        end = cleaned[i + 1][0] - 1 if i + 1 < len(cleaned) else len(doc) - 1
+    for unit_num in sorted(unit_toc_pages.keys()):
+        toc_pg = unit_toc_pages[unit_num]
+        pdf_start = toc_pg + OFFSET
+        if pdf_start >= len(doc):
+            continue
+        # Extract title from the PDF page content
+        page_text = doc[pdf_start].get_text("text")
+        lines = page_text.splitlines()
+        # Title is first substantial non-number, non-"Unit" line
+        title = ""
+        for j, ln in enumerate(lines[:6]):
+            ln_s = ln.strip()
+            if not ln_s or len(ln_s) < 3:
+                continue
+            if UNIT_NUM_LINE.match(ln_s):
+                continue
+            # Skip standalone "Unit" (no number after)
+            if ln_s == "Unit":
+                continue
+            # Skip "Unit N" (number only, no title on same line)
+            if re.match(r"^\s*Unit\s+\d+\s*$", ln_s, re.IGNORECASE):
+                continue
+            title = ln_s
+            break
+        if not title:
+            title = f"Unit {unit_num}"
         boundaries.append(
             LessonBoundary(
                 vol_id=vol_id,
-                lesson_idx=idx,
+                lesson_idx=unit_num,
                 title=title,
-                start_page=page_no,
-                end_page=end,
+                start_page=pdf_start,
+                end_page=0,  # filled below
             )
         )
+
+    # Fill end_page = next unit's start - 1
+    for i, b in enumerate(boundaries):
+        if i + 1 < len(boundaries):
+            b.end_page = boundaries[i + 1].start_page - 1
+        else:
+            b.end_page = len(doc) - 1
+
     return boundaries
 
 
-def _parse_idx(token: str) -> int | None:
-    if token.isdigit():
-        return int(token)
-    cn = "零一二三四五六七八九十"
-    if all(c in cn for c in token):
-        if token == "十":
-            return 10
-        if token.startswith("十"):
-            return 10 + cn.index(token[1])
-        if token.endswith("十"):
-            return cn.index(token[0]) * 10
-        if "十" in token:
-            a, b = token.split("十")
-            return cn.index(a) * 10 + cn.index(b)
-        return cn.index(token)
-    return None
+def detect_boundaries(doc: fitz.Document, vol_id: str) -> list[LessonBoundary]:
+    boundaries = find_unit_boundaries(doc, vol_id)
+    if boundaries:
+        return boundaries
+    # Fallback: one lesson covering entire doc
+    return [
+        LessonBoundary(
+            vol_id=vol_id,
+            lesson_idx=1,
+            title="Full Document",
+            start_page=0,
+            end_page=len(doc) - 1,
+        )
+    ]
 
 
 def export_lesson(doc: fitz.Document, b: LessonBoundary) -> dict:
